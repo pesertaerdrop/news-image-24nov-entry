@@ -5,24 +5,27 @@
 [![reward](https://make.fun/badge/news-image-20261124/pesertaerdrop/news-image-24nov-entry/reward.svg)](https://make.fun/bounty/news-image-20261124)
 
 One front page that sums up **Tuesday 24 November 2026** in a single image:
-35 stories from 7 regions, each one dated that day.
+35 stories from 7 regions, and every one of them happened, or was
+first reported, on that day.
 
 ## What's on the page
 
-- **Three lead stories**: the UN's call for a probe into attacks off Libya,
-  the SpaceX/Grok abuse-images lawsuit, and Estonia's stand against
-  Moscow's airspace claim.
-- **Ten small leads**: record Hormuz attacks, Gaza strikes, the Hodeida
-  strike, Trump's warning to Iran, the Nikkei rally, Bangladesh's typhoid
-  drive, SoftBank's Intel bet, Arya's record 181, Revanna's life term,
-  and the capture of "El Chapo Isidro".
-- **Twenty-two more stories** in the ALSO column, from a Thai-Cambodia
-  truce to Ethereum fund outflows.
+- **Three lead stories**: a Russian strike on Zaporizhzhia that killed
+  two and wounded 22, three oil tankers ablaze in the Strait of Hormuz
+  after hitting mines, and Estonia defying Moscow over its airspace.
+- **Ten small leads**: Netanyahu urging Trump to strike Iran, Russian
+  jets breaching Korea's air defence zone, the Nikkei rallying on
+  Jensen Huang's return to Nvidia, Arya's record 181, the Pentagon
+  rebuking Canada, Hasina seeking a return to Dhaka, the Nigeria boat
+  toll rising to 29, California bracing for floods, Qatar pushing to
+  restart US–Iran diplomacy, and Fiji closing its schools for five days.
+- **Twenty-two more stories** in the ALSO column, from two diplomats
+  expelled in a spy row to Gemini 4 finding cheaper quantum code.
 - **A realistic world map**: navy sea, filled tan continents, a dashed
   equator, and thirteen numbered pins at the places where the stories
-  happened — Benghazi, Portland, Tallinn, the Strait of Hormuz, Gaza,
-  Hodeida, Tehran, Tokyo, Dhaka, Santa Clara, Indore, Bengaluru,
-  Culiacán.
+  happened — Zaporizhzhia, the Strait of Hormuz, Tallinn, Tehran,
+  Seoul, Tokyo, Indore, Ottawa, Dhaka, Bayelsa, California, Doha
+  and Fiji.
 - **A DATE CHECK box** that names the big stories deliberately left out
   because they belong to an earlier day: Nvidia bringing back Huang,
   the warship sunk off Libya, the COP31 collapse, the Dymer toll, the
