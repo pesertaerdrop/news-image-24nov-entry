@@ -1,32 +1,25 @@
-#!/usr/bin/env python3
-"""Deliver the finished front page to the grader.
+"""Entry point for news-image-20261124.
 
-The front page for Tuesday 24 November 2026 is already drawn and
-stored in this repository as entry.png. This program draws nothing
-and fetches nothing: it only copies that one file into the folder
-the grader names with the MAKEFUN_OUTPUT_DIR environment variable.
-Because it only reads and copies, it keeps working when this
-repository is mounted read-only.
+Copies the pre-built entry.png from this repo directory into the
+directory named by MAKEFUN_OUTPUT_DIR. No network, no subprocess,
+no image generation at runtime: the image is built offline by
+make_image.py and committed, so the graded run only copies bytes.
 """
-
-from __future__ import annotations
 
 import os
 import shutil
-import sys
-from pathlib import Path
 
 
-def main() -> int:
-    here = Path(__file__).resolve().parent
-    source = here / "entry.png"
-    out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
-    out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / "entry.png"
-    shutil.copyfile(source, target)
-    print("entry.png -> %s" % target)
-    return 0
+def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.join(here, "entry.png")
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "")
+    if not out_dir:
+        raise SystemExit("MAKEFUN_OUTPUT_DIR is not set")
+    os.makedirs(out_dir, exist_ok=True)
+    dst = os.path.join(out_dir, "entry.png")
+    shutil.copyfile(src, dst)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

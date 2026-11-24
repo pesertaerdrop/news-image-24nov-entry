@@ -1,537 +1,495 @@
-#!/usr/bin/env python3
-"""Draw one front page that sums up Tuesday 24 November 2026.
+"""Build entry.png for news-image-20261124 (v3).
 
-Every story on the page happened, or was first reported, on
-24 November 2026. The page is drawn with Pillow only: no pictures
-are downloaded and no network is touched. Each headline, caption
-and list item is measured before it is drawn, and the build stops
-with an OVERFLOW error instead of printing a clipped page.
-
-Layout (1024 x 1024, cream paper):
-  top bar, masthead, red subline, stat strip, region bar,
-  three lead stories, ten small leads in two rows, a realistic
-  world map with thirteen numbered pins beside a 22-item ALSO
-  column, a red DATE CHECK box naming the big stories that
-  belong to an earlier day, and a sources line.
+One-day world news front page, 1024x1024. Drawn fresh with Pillow
+only; no network, no randomness, no timestamps, so repeated runs
+produce identical bytes. Run: python3 make_image.py (writes
+entry.png next to this file). The graded entry point main.py only
+copies that committed image; it never runs this builder.
 """
 
-from __future__ import annotations
-
-import math
 import os
-import sys
-from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-# ---------------------------------------------------------------- palette
-CREAM = (250, 244, 230)
-INK = (30, 30, 30)
-RED = (178, 34, 34)
-TAN = (198, 170, 120)
+W, H = 1024, 1024
+CREAM = (252, 248, 238)
+INK = (22, 22, 22)
+RED = (176, 32, 32)
 NAVY = (18, 28, 55)
-GREY = (110, 110, 110)
-WHITE = (255, 255, 255)
-LAND_EDGE = (70, 55, 30)
-SOFT = (235, 226, 200)
-GOLD = (212, 160, 40)
-STEEL = (40, 80, 140)
-SLATE = (52, 58, 74)
-ORANGE = (214, 110, 30)
+TAN = (198, 170, 120)
+LAND_LINE = (74, 62, 40)
+GREY = (110, 108, 100)
+DARK_BAR = (28, 34, 52)
 
-# ---------------------------------------------------------------- geometry
-W = 1024
-H = 1024
-MX = 12
-RX = 1012
-MAP_X0, MAP_X1 = 12, 412
-MAP_Y0, MAP_Y1 = 695, 915
-HERO_X = [12, 350, 688]
-HERO_W = 312
-SMALL_X = [12, 214, 416, 618, 820]
-SMALL_W = 190
-ALSO_COLS = [(420, 280), (712, 298)]
-
-# ---------------------------------------------------------------- fonts
-_FONT_DIRS = [
-    "/usr/share/fonts/truetype/dejavu/",
-    "/usr/share/fonts/dejavu/",
-]
+FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
 
-def load_font(name, size):
-    for folder in _FONT_DIRS:
-        path = os.path.join(folder, name)
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size)
-    return ImageFont.truetype(name, size)
+def font(name, size):
+    path = os.path.join(FONT_DIR, name)
+    try:
+        return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
 
 
-def text_w(d, text, font):
-    return d.textlength(text, font=font)
+def text_w(draw, s, f):
+    box = draw.textbbox((0, 0), s, font=f)
+    return box[2] - box[0]
 
 
-def one_line(d, text, font, maxw, what):
-    got = text_w(d, text, font)
-    if got > maxw:
-        raise AssertionError(
-            "OVERFLOW %s: %.1fpx, max %d" % (what, got, maxw)
-        )
-
-
-def wrap_lines(d, text, font, maxw, maxlines, what):
-    words = text.split()
+def wrap_lines(draw, s, f, max_w, max_lines, label):
+    """Wrap s to fit max_w; fail loudly if it needs more than max_lines."""
+    words = s.split()
     lines = []
     cur = ""
-    for wd in words:
-        trial = (cur + " " + wd).strip()
-        if text_w(d, trial, font) <= maxw:
+    for word in words:
+        trial = (cur + " " + word).strip()
+        if text_w(draw, trial, f) <= max_w or not cur:
             cur = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = wd
+            lines.append(cur)
+            cur = word
     if cur:
         lines.append(cur)
-    if len(lines) > maxlines:
+    if len(lines) > max_lines:
         raise AssertionError(
-            "OVERFLOW %s: %d lines, max %d" % (what, len(lines), maxlines)
+            "OVERFLOW %s: %d lines > %d allowed: %r" % (label, len(lines), max_lines, s)
         )
-    for line in lines:
-        one_line(d, line, font, maxw, what)
     return lines
 
 
-def italic_layer(text, font, fill, shear=0.22):
-    """Render text on its own layer, then slant it geometrically."""
-    probe = Image.new("RGBA", (10, 10))
-    pd = ImageDraw.Draw(probe)
-    tw = int(text_w(pd, text, font)) + 4
-    th = font.size + 8
-    layer = Image.new("RGBA", (tw + int(shear * th) + 4, th), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(layer)
-    ld.text((2, 2), text, font=font, fill=fill + (255,))
-    layer = layer.transform(
-        layer.size,
-        Image.AFFINE,
-        (1, -shear, shear * th, 0, 1, 0),
-        resample=Image.BICUBIC,
-    )
-    return layer
+def draw_lines(draw, lines, x, y, f, fill, pitch):
+    for i, line in enumerate(lines):
+        draw.text((x, y + i * pitch), line, font=f, fill=fill)
 
+
+# ---------------------------------------------------------------- map
+# Equirectangular: lon -168..+192 -> x 12..412, lat 84..-56 -> y 695..915.
+MAP_X0, MAP_X1 = 12, 412
+MAP_Y0, MAP_Y1 = 695, 915
+
+
+def proj(lon, lat):
+    x = MAP_X0 + (lon + 168.0) * (MAP_X1 - MAP_X0) / 360.0
+    y = MAP_Y0 + (84.0 - lat) * (MAP_Y1 - MAP_Y0) / 140.0
+    return (x, y)
+
+
+# Simplified continent outlines as (lon, lat) loops. Deliberately
+# coarse: at 400 px wide the shapes read as continents, which is
+# what the front page needs.
+LAND = [
+    # North America
+    [(-168, 66), (-150, 70), (-130, 71), (-110, 73), (-95, 80), (-80, 73),
+     (-65, 62), (-55, 47), (-65, 44), (-70, 42), (-76, 35), (-80, 32),
+     (-84, 30), (-90, 29), (-97, 26), (-104, 22), (-97, 16), (-88, 13),
+     (-82, 9), (-86, 14), (-94, 17), (-102, 20), (-110, 24), (-117, 30),
+     (-124, 40), (-124, 48), (-132, 56), (-148, 60), (-162, 58),
+     (-168, 66)],
+    # Greenland
+    [(-55, 60), (-42, 60), (-32, 66), (-22, 70), (-28, 76), (-48, 76),
+     (-58, 72), (-55, 60)],
+    # South America
+    [(-80, 9), (-76, 4), (-71, 0), (-64, -4), (-52, -4), (-42, -8),
+     (-36, -13), (-39, -22), (-47, -28), (-54, -35), (-62, -41),
+     (-68, -50), (-70, -55), (-74, -48), (-73, -36), (-72, -24),
+     (-78, -16), (-80, -8), (-80, 9)],
+    # Europe
+    [(-10, 36), (-2, 37), (4, 38), (10, 38), (18, 40), (26, 38),
+     (30, 36), (28, 41), (24, 45), (19, 45), (14, 45), (10, 44),
+     (6, 43), (2, 43), (-2, 46), (-4, 48), (-8, 50), (-4, 54),
+     (-1, 57), (3, 59), (6, 61), (10, 63), (16, 66), (24, 69),
+     (30, 70), (36, 68), (30, 65), (26, 62), (21, 58), (18, 55),
+     (12, 54), (8, 57), (4, 58), (0, 54), (-4, 51), (-8, 47),
+     (-10, 43), (-10, 36)],
+    # Africa
+    [(-10, 35), (-2, 35), (6, 37), (12, 34), (20, 32), (28, 31),
+     (32, 28), (36, 24), (40, 20), (43, 12), (50, 11), (46, 6),
+     (41, 0), (38, -6), (34, -12), (30, -18), (26, -26), (20, -32),
+     (16, -35), (12, -30), (8, -26), (4, -20), (0, -14), (-4, -6),
+     (-8, 2), (-13, 8), (-16, 12), (-12, 20), (-10, 28), (-10, 35)],
+    # Asia (mainland)
+    [(30, 70), (38, 68), (46, 70), (56, 71), (66, 72), (76, 73),
+     (86, 74), (96, 76), (106, 76), (116, 73), (126, 72), (136, 72),
+     (146, 71), (156, 70), (166, 67), (178, 65), (178, 60), (168, 60),
+     (158, 58), (150, 59), (142, 55), (138, 50), (132, 44), (127, 39),
+     (122, 37), (120, 31), (116, 24), (111, 20), (108, 13), (104, 9),
+     (100, 7), (96, 10), (91, 15), (87, 20), (82, 16), (77, 9),
+     (73, 16), (71, 22), (66, 25), (61, 25), (56, 26), (51, 28),
+     (47, 30), (42, 34), (37, 36), (33, 38), (30, 42), (30, 50),
+     (30, 60), (30, 70)],
+    # Australia
+    [(113, -22), (118, -16), (126, -13), (132, -12), (138, -12),
+     (142, -11), (146, -16), (150, -21), (153, -26), (150, -31),
+     (146, -36), (141, -38), (136, -35), (131, -32), (126, -32),
+     (121, -34), (116, -35), (113, -28), (113, -22)],
+    # Borneo
+    [(109, 1), (113, 4), (117, 6), (119, 2), (117, -2), (113, -3),
+     (110, -1), (109, 1)],
+    # Sumatra
+    [(95, 5), (99, 2), (103, -2), (106, -5), (103, -5), (99, -1),
+     (96, 2), (95, 5)],
+    # Java
+    [(105, -6), (110, -7), (114, -8), (114, -9), (108, -8), (105, -7),
+     (105, -6)],
+    # New Guinea
+    [(131, -1), (136, -2), (141, -3), (146, -6), (150, -9), (146, -8),
+     (141, -7), (136, -4), (131, -2), (131, -1)],
+    # Japan
+    [(130, 31), (133, 34), (136, 35), (139, 37), (141, 40), (143, 43),
+     (145, 44), (142, 42), (140, 38), (137, 35), (133, 33), (130, 31)],
+    # Britain
+    [(-5, 50), (-3, 53), (-5, 56), (-3, 58), (0, 56), (1, 52),
+     (-1, 51), (-4, 50), (-5, 50)],
+    # New Zealand
+    [(167, -45), (169, -42), (172, -40), (175, -38), (178, -37),
+     (176, -39), (173, -41), (170, -44), (167, -46), (167, -45)],
+    # Madagascar
+    [(44, -16), (47, -15), (50, -17), (49, -21), (46, -25), (44, -22),
+     (43, -18), (44, -16)],
+    # Philippines
+    [(120, 18), (122, 16), (122, 12), (121, 9), (120, 12), (119, 16),
+     (120, 18)],
+    # Sri Lanka
+    [(80, 9), (81, 7), (80, 6), (79, 8), (80, 9)],
+]
+
+# Caspian Sea, painted navy on top of the Asian landmass.
+CASPIAN = [(47, 47), (51, 47), (54, 44), (53, 40), (50, 37), (47, 39),
+           (46, 43), (47, 47)]
+
+
+def draw_map(img, draw, pins):
+    """Realistic filled-continent map with numbered pins."""
+    draw.rectangle([MAP_X0, MAP_Y0, MAP_X1, MAP_Y1], fill=NAVY)
+    for poly in LAND:
+        pts = [proj(lon, lat) for lon, lat in poly]
+        draw.polygon(pts, fill=TAN, outline=LAND_LINE)
+    # Caspian Sea back to navy.
+    draw.polygon([proj(lon, lat) for lon, lat in CASPIAN], fill=NAVY)
+    # Persian Gulf notch: small navy wedge into the Arabian coast.
+    gulf = [(48, 30), (52, 29), (56, 27), (54, 25), (50, 26), (48, 28)]
+    draw.polygon([proj(lon, lat) for lon, lat in gulf], fill=NAVY)
+    # Dashed equator.
+    eq_y = proj(0, 0)[1]
+    x = MAP_X0
+    while x < MAP_X1:
+        draw.line([(x, eq_y), (min(x + 6, MAP_X1), eq_y)], fill=(150, 160, 190), width=1)
+        x += 12
+    draw.rectangle([MAP_X0, MAP_Y0, MAP_X1, MAP_Y1], outline=INK, width=2)
+    # Pins: red disc, white number, leader line when display != true.
+    pin_f = font("DejaVuSans-Bold.ttf", 9)
+    for num, (tlon, tlat, dlon, dlat) in pins:
+        dx, dy = proj(dlon, dlat)
+        tx, ty = proj(tlon, tlat)
+        if abs(dx - tx) > 1 or abs(dy - ty) > 1:
+            draw.line([(dx, dy), (tx, ty)], fill=RED, width=1)
+            draw.ellipse([tx - 2, ty - 2, tx + 2, ty + 2], fill=RED)
+        r = 7
+        draw.ellipse([dx - r, dy - r, dx + r, dy + r], fill=RED, outline=(255, 255, 255))
+        label = str(num)
+        tw = text_w(draw, label, pin_f)
+        draw.text((dx - tw / 2, dy - 6), label, font=pin_f, fill=(255, 255, 255))
 
 # ---------------------------------------------------------------- content
-TOP_BAR = "35 STORIES \u00b7 7 REGIONS \u00b7 EVERY ONE DATED TUESDAY 24 NOVEMBER 2026"
+# Every story below was checked against its own primary-source
+# article for a Tuesday 24 November 2026 publication or event date.
+# Aggregator timestamps were NOT trusted (see the build report).
+
 MASTHEAD = "Tuesday 24 November 2026"
-SUBLINE = "Zaporizhzhia hit, 2 killed \u00b7 Three tankers ablaze in Hormuz \u00b7 Estonia defies Moscow"
+SUBLINE = ("Zaporizhzhia hit, 2 killed \u00b7 Russian jets breach Korea zone "
+           "\u00b7 Estonia defies Moscow")
 
 STATS = [
-    ("2", "killed in Zaporizhzhia strike"),
+    ("2", "killed in Zaporizhzhia"),
     ("22", "wounded in Zaporizhzhia"),
-    ("3", "tankers ablaze in Hormuz"),
-    ("181", "Arya's record T20 score"),
-    ("+3.9%", "Nikkei rallies on Huang"),
-    ("29", "killed in Nigeria boat tragedy"),
+    ("18", "years, Equinor\u2013VNG deal"),
+    ("181", "Arya runs"),
+    ("+3.9%", "Nikkei rise"),
+    ("93", "Azharuddeen 93*"),
 ]
 
-# (label, count, cell width)
 REGIONS = [
-    ("EUROPE", 5, 210),
-    ("MIDDLE EAST", 6, 105),
-    ("AMERICAS", 4, 158),
-    ("ASIA-PACIFIC", 10, 262),
-    ("AFRICA", 4, 105),
-    ("OCEANIA", 3, 80),
-    ("WORLD", 3, 80),
+    ("EUROPE", 5),
+    ("MIDDLE EAST", 2),
+    ("AMERICAS", 4),
+    ("ASIA-PACIFIC", 13),
+    ("AFRICA", 6),
+    ("OCEANIA", 4),
+    ("WORLD", 1),
 ]
 
-# (number, region, head, sub, art kind)
+# Heroes: (kicker, head, sub, art kind, pin true lon/lat, pin display lon/lat)
 HEROES = [
-    (1, "EUROPE", "Russian strike kills 2 in Zaporizhzhia",
-     "Moscow's attack wounds 22 in the city; Kyiv says it came as peace talks stall.",
-     "blast"),
-    (2, "MIDDLE EAST", "Three tankers ablaze in Hormuz",
-     "Ships hit mines in the strait, Guards say; oil jumps as crews are rescued.",
-     "ship"),
-    (3, "EUROPE", "Estonia defies Moscow on airspace",
-     "Tallinn rejects Russia's claim after its warning; NATO allies back the denial.",
-     "shield"),
+    ("UKRAINE \u00b7 EUROPE",
+     "Zaporizhzhia hit, 2 killed",
+     "Russian strike wounds 22, incl. 2 children, in city centre",
+     "burst", (35.2, 47.8), (35.2, 47.8)),
+    ("KOREA \u00b7 ASIA-PACIFIC",
+     "Russian jets breach Korea zone",
+     "Seoul scrambles fighters; alert on Ulleung as jets enter ADIZ",
+     "contrail", (127.0, 37.5), (127.0, 37.5)),
+    ("ESTONIA \u00b7 EUROPE",
+     "Estonia defies Moscow",
+     "Tallinn rejects Moscow\u2019s airspace claim",
+     "stripes", (24.7, 59.4), (24.7, 59.4)),
 ]
 
-# (number, region, head, sub, art kind)
+# Smalls: (kicker, head, sub, pin true lon/lat, pin display lon/lat)
 SMALLS = [
-    (4, "MIDDLE EAST", "Netanyahu urges Trump to hit Iran",
-     "Israeli PM presses US for fresh strikes amid Gulf strain.", "flag"),
-    (5, "ASIA-PACIFIC", "Russian jets breach Korea zone",
-     "Seoul scrambles fighters; alert sounded for Ulleung Island.", "jet"),
-    (6, "ASIA-PACIFIC", "Nikkei rallies on Huang's return",
-     "Tokyo jumps 3.9% as Nvidia chief's comeback revives AI trade.", "bars"),
-    (7, "ASIA-PACIFIC", "Arya smashes record 181",
-     "India opener's 181 in Indore sets a new T20I benchmark.", "ball"),
-    (8, "AMERICAS", "Pentagon rebukes Canada on jets",
-     "US slams Ottawa over defence spending and F-35 review.", "shield"),
-    (9, "ASIA-PACIFIC", "Hasina seeks return to Dhaka",
-     "Ousted PM eyes Dec 16 homecoming, aide tells Reuters.", "flag"),
-    (10, "AFRICA", "Nigeria boat toll rises to 29",
-     "Bayelsa tragedy deepens as more bodies are recovered.", "boat"),
-    (11, "AMERICAS", "California braces for flood threat",
-     "King tides and El Ni\u00f1o rains threaten triple flooding.", "waves"),
-    (12, "MIDDLE EAST", "Qatar PM pushes Iran diplomacy",
-     "Doha seeks to restart US\u2013Iran talks after Rubio meeting.", "doc"),
-    (13, "OCEANIA", "Fiji shuts schools for five days",
-     "El Ni\u00f1o drought closes every school across the islands.", "house"),
+    ("INDIA \u00b7 CRICKET",
+     "Amandeep\u2019s maiden ton seals win",
+     "Khare\u2019s first T20 century powers chase past Goa",
+     (88.4, 22.6), (88.4, 18.0)),
+    ("JAPAN \u00b7 MARKETS",
+     "Nikkei jumps 3.9% on Huang return",
+     "Tokyo surges as Nvidia chief\u2019s comeback revives AI trade",
+     (139.7, 35.7), (139.7, 35.7)),
+    ("INDIA \u00b7 CRICKET",
+     "Arya smashes record 181",
+     "Delhi skipper\u2019s 181 is the most by an Indian in T20s",
+     (75.9, 22.7), (75.9, 22.7)),
+    ("NORWAY \u00b7 ENERGY",
+     "Equinor signs 18-year gas deal",
+     "Norway to send 15.3 TWh a year to Germany\u2019s VNG",
+     (5.7, 58.9), (5.7, 58.9)),
+    ("US \u00b7 DEFENCE",
+     "Pentagon rebukes Canada on jets",
+     "US faults Ottawa on defence spending and F-35 review",
+     (-75.7, 45.4), (-75.7, 45.4)),
+    ("BANGLADESH \u00b7 POLITICS",
+     "Hasina plans return on Dec 16",
+     "Ex-PM in exile says she will return to Dhaka next month",
+     (90.4, 23.8), (96.0, 28.0)),
+    ("INDIA \u00b7 CRICKET",
+     "Kerala cruise past Assam",
+     "Azharuddeen\u2019s 93* off 37 seals 9-wicket win",
+     (76.7, 30.7), (76.7, 33.5)),
+    ("US \u00b7 WEATHER",
+     "California braces for king tides",
+     "Coastal flood threat peaks as tides surge on Tuesday",
+     (-122.4, 37.8), (-122.4, 37.8)),
+    ("NEW ZEALAND \u00b7 CRICKET",
+     "Tickner out of Christchurch Test",
+     "Hamstring rules out seamer; Fisher called in as cover",
+     (172.6, -43.5), (172.6, -43.5)),
+    ("CHINA \u00b7 SPACE",
+     "China unveils Shenzhou-24 crew",
+     "Pakistani to be first foreigner aboard Tiangong station",
+     (100.3, 40.9), (100.3, 40.9)),
 ]
 
-# (number, region, brief) — first 11 go in column one, rest in column two
+# ALSO items 14-35, one line each.
 ALSO = [
-    (14, "EUROPE", "Two diplomats expelled in spy row"),
-    (15, "EUROPE", "Brentford thrash Everton 4-0"),
-    (16, "EUROPE", "Woman found stabbed near Blaina"),
-    (17, "MIDDLE EAST", "Iran vows wider reply to US"),
-    (18, "MIDDLE EAST", "US hits Iran shadow banks"),
-    (19, "MIDDLE EAST", "Iran vows to beat US blockade"),
-    (20, "AMERICAS", "DNA solves 1968 Ontario murder"),
-    (21, "AMERICAS", "Commanders edge Bengals 22-20"),
-    (22, "ASIA-PACIFIC", "China sentences spy to death"),
-    (23, "ASIA-PACIFIC", "Japan enlists car firms in arms"),
-    (24, "ASIA-PACIFIC", "Korea bank to hike rates"),
-    (25, "ASIA-PACIFIC", "Bengal beat UP by 93 runs"),
-    (26, "ASIA-PACIFIC", "India 3rd in Asia Power Index"),
-    (27, "ASIA-PACIFIC", "India\u2013NZ Wellington Test drawn"),
-    (28, "AFRICA", "South Africa bowl Bangladesh for 91"),
-    (29, "AFRICA", "Ghana backs two-year BECE ban"),
-    (30, "AFRICA", "Tullow cuts forecast on Ghana tax"),
-    (31, "OCEANIA", "Coalition opposes Vanuatu treaty deal"),
-    (32, "OCEANIA", "Kiribati's Kanton Island evacuated"),
-    (33, "WORLD", "Ethereum funds see $131M outflows"),
-    (34, "WORLD", "Google cuts agent hijacking to 0.9%"),
-    (35, "WORLD", "Gemini 4 finds cheaper quantum code"),
+    "Boda boda riders lose 20% of pay to bribes",
+    "Brentford hit Everton for four",
+    "Seoul toughens exam rules after cheating",
+    "Middle East crude exports trend lower",
+    "Israeli strike kills 3 in southern Gaza",
+    "Pepkor warns port chaos will hit trade",
+    "Ghana pledges bonus after amputee Cup win",
+    "Commanders edge Bengals 22-20",
+    "S&P slashes Philippine growth outlook",
+    "Japan enlists car firms in arms buildup",
+    "Korea bank to hike rates on Thursday",
+    "Bengal beat UP by 93 runs",
+    "Trump to meet NATO chief Rutte Wednesday",
+    "Rand steady ahead of leading indicator",
+    "South Africa bowl Bangladesh for 91",
+    "Australia rotate for league Cup final",
+    "NATO chief vows defence on space threat",
+    "Buffalo City up for grabs as ANC faces test",
+    "Kiribati evacuates Kanton Island",
+    "US futures climb as Asian shares mixed",
+    "De Villiers: tampering \u2018started in Durban\u2019",
+    "Gold Fields eyes $7.5bn for Tarkwa mine",
 ]
+
+DATE_CHECK_ITEMS = [
+    "Huang returns 23 Nov",
+    "Libya warship 23 Nov",
+    "COP31 22 Nov",
+    "Dymer 23 Nov",
+    "Cikande 22 Nov",
+    "Liverpool 22 Nov",
+    "Hormuz tankers 23 Nov",
+]
+
+SOURCES = ("Sources: Reuters \u00b7 AJU Press \u00b7 IANS \u00b7 Cricinfo \u00b7 crex "
+           "\u00b7 The Standard \u00b7 Manila Times \u00b7 BBC \u00b7 AP \u00b7 eNCA "
+           "\u00b7 MyJoyOnline")
 
 MAP_CAPTION = "Thirteen stories, pinned where they happened."
-DATE_CHECK_TITLE = "DATE CHECK \u2014 NOT TODAY"
-DATE_CHECK_ROWS = [
-    "Nvidia brings back Huang (23 Nov) \u00b7 Ukraine sinks warship off Libya (23 Nov) \u00b7 COP31 collapses (22 Nov)",
-    "Dymer toll hits 11 (23 Nov) \u00b7 Cikande fire toll 24 (22 Nov) \u00b7 Liverpool 4-0 Man Utd (22 Nov)",
-]
-SOURCES = "Sources: Reuters, Starlit Daily, TBS News, ESPNcricinfo, IANS, AP, AFP, BBC"
-
-# ---------------------------------------------------------------- map data
-# Land polygons as (lon, lat) lists; drawn filled tan on a navy ocean.
-# Eurasia is a single polygon so no seam shows between Europe and Asia.
-NORTH_AMERICA = [(-168, 66), (-160, 59), (-152, 59), (-143, 60), (-134, 57), (-129, 53), (-125, 48), (-124, 42), (-120, 35), (-114, 30), (-109, 24), (-105, 20), (-98, 16), (-92, 14), (-86, 12), (-82, 9), (-79, 8), (-81, 12), (-85, 16), (-88, 20), (-91, 19), (-95, 19), (-97, 25), (-95, 29), (-90, 29), (-84, 30), (-81, 26), (-80, 31), (-77, 34), (-75, 38), (-73, 41), (-69, 43), (-65, 44), (-60, 46), (-56, 49), (-59, 53), (-63, 58), (-67, 59), (-71, 61), (-77, 62), (-83, 65), (-89, 66), (-95, 68), (-102, 68), (-110, 68), (-118, 69), (-126, 70), (-134, 70), (-142, 70), (-150, 70), (-158, 71), (-166, 69), (-168, 66)]
-GREENLAND = [(-55, 60), (-48, 60), (-42, 61), (-40, 64), (-32, 68), (-25, 70), (-20, 72), (-20, 76), (-25, 80), (-32, 80), (-40, 79), (-50, 77), (-58, 74), (-60, 70), (-58, 66), (-55, 60)]
-SOUTH_AMERICA = [(-79, 9), (-77, 5), (-78, 0), (-81, -4), (-80, -7), (-77, -12), (-73, -16), (-70, -19), (-70, -23), (-70, -28), (-72, -33), (-73, -38), (-73, -44), (-74, -48), (-73, -52), (-69, -54), (-66, -55), (-65, -50), (-63, -45), (-61, -40), (-58, -35), (-54, -34), (-51, -31), (-48, -28), (-44, -23), (-41, -22), (-39, -17), (-37, -13), (-35, -9), (-35, -6), (-38, -4), (-41, -3), (-44, -2), (-47, -1), (-50, 0), (-52, 4), (-55, 6), (-58, 8), (-62, 9), (-66, 10), (-70, 11), (-74, 11), (-77, 10), (-79, 9)]
-EURASIA = [(-10, 36), (-9, 43), (-2, 48), (2, 51), (6, 54), (8, 57), (6, 60), (10, 62), (14, 66), (19, 69), (26, 71), (32, 70), (40, 68), (48, 68), (56, 69), (64, 70), (72, 72), (80, 73), (88, 75), (96, 76), (104, 77), (112, 74), (120, 73), (128, 71), (136, 71), (144, 72), (152, 70), (160, 69), (168, 66), (178, 65), (178, 62), (170, 60), (162, 56), (158, 51), (150, 59), (142, 55), (140, 47), (135, 43), (130, 42), (127, 40), (122, 38), (120, 34), (121, 30), (118, 25), (113, 22), (109, 19), (106, 10), (103, 8), (100, 7), (98, 10), (94, 16), (91, 22), (88, 22), (85, 20), (82, 17), (80, 13), (77, 8), (74, 13), (72, 20), (69, 22), (66, 25), (62, 25), (58, 25), (56, 27), (54, 28), (52, 29), (50, 30), (48, 30), (49, 29), (51, 28), (53, 27), (55, 26), (56, 25), (57, 24), (58, 22), (59, 20), (57, 18), (54, 16), (51, 15), (48, 14), (45, 13), (43, 12), (41, 13), (39, 15), (37, 17), (35, 20), (34, 23), (35, 26), (34, 28), (35, 31), (36, 34), (36, 36), (33, 36), (30, 36), (27, 37), (24, 36), (22, 37), (23, 39), (21, 40), (19, 42), (18, 40), (16, 40), (14, 42), (12, 45), (10, 44), (7, 44), (4, 43), (2, 41), (0, 39), (-2, 37), (-5, 36), (-9, 38)]
-AFRICA = [(-6, 35), (-10, 31), (-13, 28), (-16, 24), (-17, 20), (-17, 15), (-16, 12), (-13, 8), (-8, 5), (-4, 5), (0, 6), (4, 6), (6, 4), (8, 4), (9, 2), (9, -1), (12, -5), (13, -9), (12, -13), (13, -17), (12, -21), (14, -26), (16, -29), (18, -32), (19, -34), (22, -34), (25, -34), (28, -33), (31, -29), (33, -26), (35, -24), (36, -21), (38, -18), (40, -15), (40, -12), (41, -8), (42, -4), (43, -1), (45, 0), (47, 2), (49, 5), (51, 10), (51, 12), (48, 12), (44, 12), (42, 14), (40, 16), (38, 19), (37, 22), (35, 25), (34, 28), (33, 29), (32, 31), (30, 31), (27, 32), (24, 32), (21, 33), (18, 33), (15, 32), (12, 34), (10, 34), (8, 35), (5, 36), (2, 36), (0, 36), (-3, 35), (-6, 35)]
-AUSTRALIA = [(114, -22), (114, -30), (115, -33), (118, -35), (124, -33), (129, -32), (132, -32), (135, -35), (138, -35), (140, -38), (145, -38), (150, -37), (153, -32), (153, -27), (151, -24), (149, -20), (146, -19), (143, -15), (142, -11), (141, -13), (139, -17), (136, -15), (135, -12), (132, -12), (130, -13), (126, -14), (122, -17), (118, -20), (114, -22)]
-NEW_GUINEA = [(131, -1), (133, -2), (136, -2), (138, -3), (141, -3), (144, -4), (146, -6), (148, -8), (150, -10), (147, -9), (144, -8), (141, -8), (138, -7), (135, -5), (132, -3), (131, -1)]
-BORNEO = [(109, 0), (110, 1), (112, 3), (114, 5), (116, 6), (118, 2), (117, -1), (116, -3), (114, -3), (111, -3), (109, -1), (109, 0)]
-SUMATRA = [(95, 5), (97, 4), (99, 1), (101, -1), (103, -3), (105, -5), (106, -6), (104, -5), (102, -3), (100, 0), (98, 2), (96, 4), (95, 5)]
-JAVA = [(105, -6), (108, -7), (110, -7), (112, -7), (114, -8), (114, -9), (112, -8), (110, -8), (108, -8), (106, -7), (105, -6)]
-MADAGASCAR = [(44, -16), (46, -15), (49, -14), (50, -16), (49, -19), (47, -22), (45, -25), (44, -25), (43, -22), (43, -19), (44, -16)]
-BRITAIN = [(-5, 50), (-3, 53), (-5, 56), (-3, 58), (-1, 57), (0, 53), (1, 51), (0, 50), (-3, 50), (-5, 50)]
-JAPAN = [(130, 31), (132, 33), (134, 34), (136, 35), (138, 35), (140, 36), (141, 38), (141, 40), (141, 42), (142, 44), (144, 44), (145, 43), (143, 42), (141, 40), (140, 38), (139, 36), (137, 35), (135, 34), (133, 33), (131, 32), (130, 31)]
-NZ_NORTH = [(173, -35), (175, -37), (177, -38), (178, -38), (176, -40), (175, -41), (174, -41), (173, -39), (173, -37)]
-NZ_SOUTH = [(168, -44), (170, -43), (172, -42), (174, -41), (173, -43), (171, -45), (169, -46), (167, -46), (167, -45)]
-ICELAND = [(-22, 64), (-20, 63), (-16, 64), (-14, 64), (-15, 66), (-18, 66), (-22, 65), (-22, 64)]
-
-LAND = [NORTH_AMERICA, GREENLAND, SOUTH_AMERICA, EURASIA, AFRICA,
-        AUSTRALIA, NEW_GUINEA, BORNEO, SUMATRA, JAVA, MADAGASCAR,
-        BRITAIN, JAPAN, NZ_NORTH, NZ_SOUTH, ICELAND]
-
-# Inland seas painted navy on top of the land.
-CASPIAN = [(47, 47), (49, 47), (51, 46), (52, 44), (53, 42), (52, 40), (51, 38), (50, 37), (48, 37), (47, 39), (46, 42), (47, 45)]
-BLACK_SEA = [(28, 41), (31, 41), (34, 42), (37, 43), (39, 44), (41, 46), (41, 47), (39, 46), (36, 45), (33, 44), (30, 43), (28, 42)]
-
-# (story number, lon, lat, display nudge dx, dy in pixels; 0,0 = true spot)
-# Pins 1-13 are the three heroes plus the ten small leads, in story order.
-PINS = [
-    (1, 35.12, 47.85, 0, 0),      # Zaporizhzhia
-    (2, 56.5, 26.5, 19, 10),      # Strait of Hormuz
-    (3, 24.75, 59.44, 0, 0),      # Tallinn
-    (4, 51.39, 35.69, 0, 0),      # Tehran
-    (5, 126.98, 37.57, 0, 0),     # Seoul
-    (6, 139.69, 35.68, 14, 11),   # Tokyo
-    (7, 75.86, 22.72, 0, 0),      # Indore
-    (8, -75.70, 45.42, 0, 0),     # Ottawa
-    (9, 90.41, 23.81, 15, 10),    # Dhaka
-    (10, 6.3, 4.9, 0, 0),         # Bayelsa, Nigeria
-    (11, -120.0, 37.0, 0, 0),     # California
-    (12, 51.53, 25.29, -18, 15),  # Doha
-    (13, 178.0, -17.7, 0, 0),     # Fiji
-]
 
 
-def project(lon, lat):
-    """Equirectangular: lon -168..+192 -> x, lat 84..-56 -> y."""
-    x = MAP_X0 + (lon + 168) / 360.0 * (MAP_X1 - MAP_X0)
-    y = MAP_Y0 + (84 - lat) / 140.0 * (MAP_Y1 - MAP_Y0)
-    return x, y
+def hero_art(draw, x, y, w, h, kind):
+    draw.rectangle([x, y, x + w, y + h], fill=NAVY)
+    if kind == "burst":
+        cx, cy = x + w // 2, y + h // 2
+        draw.ellipse([cx - 26, cy - 26, cx + 26, cy + 26], fill=(198, 90, 40))
+        draw.ellipse([cx - 12, cy - 12, cx + 12, cy + 12], fill=(240, 200, 90))
+        for dx, dy in ((-52, -18), (52, -18), (-52, 18), (52, 18), (0, -30), (0, 30)):
+            draw.line([(cx, cy), (cx + dx, cy + dy)], fill=(240, 200, 90), width=2)
+    elif kind == "contrail":
+        draw.line([(x + 8, y + h - 12), (x + w - 30, y + 12)], fill=(240, 200, 90), width=3)
+        draw.line([(x + 8, y + h - 12), (x + w - 70, y + h - 12)], fill=(150, 160, 190), width=2)
+        draw.ellipse([x + w - 44, y + 4, x + w - 20, y + 28], fill=RED)
+    else:  # stripes
+        third = h // 3
+        draw.rectangle([x, y, x + w, y + third], fill=(38, 70, 140))
+        draw.rectangle([x, y + third, x + w, y + 2 * third], fill=(20, 20, 20))
+        draw.rectangle([x, y + 2 * third, x + w, y + h], fill=(235, 235, 235))
 
 
-# ---------------------------------------------------------------- icons
-def draw_icon(d, kind, cx, cy, s, color):
-    """One simple geometric motif, centred on (cx, cy), size s."""
-    h = s / 2.0
-    if kind == "flag":
-        d.line([(cx - h * 0.6, cy + h), (cx - h * 0.6, cy - h)], fill=color, width=3)
-        d.polygon([(cx - h * 0.6, cy - h), (cx + h * 0.8, cy - h * 0.55),
-                   (cx - h * 0.6, cy - h * 0.1)], fill=color)
-    elif kind == "jet":
-        d.polygon([(cx + h, cy), (cx - h * 0.7, cy - h * 0.45),
-                   (cx - h * 0.3, cy), (cx - h * 0.7, cy + h * 0.45)], fill=color)
-        d.line([(cx - h * 0.7, cy - h * 0.7), (cx - h * 0.2, cy - h * 0.1)], fill=color, width=2)
-        d.line([(cx - h * 0.7, cy + h * 0.7), (cx - h * 0.2, cy + h * 0.1)], fill=color, width=2)
-    elif kind == "bars":
-        for i, f in enumerate((0.45, 0.7, 1.0)):
-            bx = cx - h + i * (2 * h / 3.0)
-            d.rectangle([bx, cy + h - f * 2 * h, bx + h * 0.45, cy + h], fill=color)
-    elif kind == "ball":
-        d.ellipse([cx - h, cy - h, cx + h, cy + h], fill=color)
-        d.arc([cx - h, cy - h, cx + h, cy + h], 200, 340, fill=WHITE, width=2)
-        d.arc([cx - h, cy - h, cx + h, cy + h], 20, 160, fill=WHITE, width=2)
-    elif kind == "shield":
-        d.polygon([(cx - h * 0.8, cy - h), (cx + h * 0.8, cy - h),
-                   (cx + h * 0.8, cy), (cx, cy + h),
-                   (cx - h * 0.8, cy)], fill=color)
-        r = h * 0.32
-        d.ellipse([cx - r, cy - r * 0.7, cx + r, cy + r * 0.7], fill=WHITE)
-    elif kind == "boat":
-        d.polygon([(cx - h, cy + h * 0.2), (cx + h, cy + h * 0.2),
-                   (cx + h * 0.6, cy + h * 0.8), (cx - h * 0.6, cy + h * 0.8)], fill=color)
-        d.line([(cx, cy + h * 0.2), (cx, cy - h)], fill=color, width=3)
-        d.polygon([(cx, cy - h), (cx + h * 0.55, cy - h * 0.6),
-                   (cx, cy - h * 0.2)], fill=color)
-    elif kind == "waves":
-        for j, yy in enumerate((-0.5, 0.0, 0.5)):
-            pts = []
-            for k in range(9):
-                px = cx - h + k * (2 * h / 8.0)
-                py = cy + yy * h + (h * 0.18 if k % 2 == 0 else -h * 0.18)
-                pts.append((px, py))
-            d.line(pts, fill=color, width=3)
-    elif kind == "house":
-        d.rectangle([cx - h * 0.7, cy - h * 0.1, cx + h * 0.7, cy + h], fill=color)
-        d.polygon([(cx - h * 0.9, cy - h * 0.1), (cx + h * 0.9, cy - h * 0.1),
-                   (cx, cy - h)], fill=color)
-        d.rectangle([cx - h * 0.18, cy + h * 0.3, cx + h * 0.18, cy + h], fill=WHITE)
-    elif kind == "doc":
-        d.rectangle([cx - h * 0.6, cy - h, cx + h * 0.6, cy + h], outline=color, width=3)
-        for j, yy in enumerate((-0.5, 0.0, 0.5)):
-            d.line([(cx - h * 0.35, cy + yy * h), (cx + h * 0.35, cy + yy * h)],
-                   fill=color, width=2)
-    elif kind == "ship":
-        d.polygon([(cx - h, cy + h * 0.1), (cx + h, cy + h * 0.1),
-                   (cx + h * 0.7, cy + h * 0.7), (cx - h * 0.7, cy + h * 0.7)], fill=color)
-        d.rectangle([cx - h * 0.2, cy - h * 0.5, cx + h * 0.1, cy + h * 0.1], fill=color)
-        d.polygon([(cx - h * 0.05, cy - h), (cx + h * 0.3, cy - h * 0.4),
-                   (cx - h * 0.05, cy - h * 0.3)], fill=ORANGE)
-    elif kind == "blast":
-        for k in range(8):
-            ang = k * 3.14159 / 4.0
-            reach = 1.0 if k % 2 == 0 else 0.55
-            tipx = cx + h * 0.95 * math.cos(ang) * reach
-            tipy = cy + h * 0.95 * math.sin(ang) * reach
-            base1 = cx + h * 0.3 * math.cos(ang + 0.5)
-            base2 = cy + h * 0.3 * math.sin(ang + 0.5)
-            base3 = cx + h * 0.3 * math.cos(ang - 0.5)
-            base4 = cy + h * 0.3 * math.sin(ang - 0.5)
-            d.polygon([(tipx, tipy), (base1, base2), (base3, base4)], fill=color)
-        d.ellipse([cx - h * 0.28, cy - h * 0.28, cx + h * 0.28, cy + h * 0.28], fill=GOLD)
-
-# ---------------------------------------------------------------- sections
-def draw_topbar(d):
-    f = load_font("DejaVuSans-Bold.ttf", 11)
-    one_line(d, TOP_BAR, f, RX - MX, "top bar")
-    d.text(((W - text_w(d, TOP_BAR, f)) / 2, 11), TOP_BAR, font=f, fill=INK)
-
-
-def draw_masthead(d, img):
-    f = load_font("DejaVuSerif-Bold.ttf", 56)
-    one_line(d, MASTHEAD, f, RX - MX, "masthead")
-    d.text(((W - text_w(d, MASTHEAD, f)) / 2, 28), MASTHEAD, font=f, fill=INK)
-    f_sub = load_font("DejaVuSerif.ttf", 17)
-    cap = italic_layer(SUBLINE, f_sub, RED)
-    if cap.width > RX - MX:
-        raise AssertionError("OVERFLOW subline")
-    img.paste(cap, (int((W - cap.width) / 2), 98), cap)
-
-
-def draw_stats(d):
-    f_num = load_font("DejaVuSans-Bold.ttf", 28)
-    f_cap = load_font("DejaVuSans.ttf", 9)
-    cell = (RX - MX) / 6.0
-    for i, (num, cap) in enumerate(STATS):
-        cx = MX + cell * i + cell / 2.0
-        one_line(d, num, f_num, cell - 8, "stat number %s" % num)
-        one_line(d, cap, f_cap, cell - 8, "stat caption %s" % cap)
-        d.text((cx - text_w(d, num, f_num) / 2, 128), num, font=f_num, fill=RED)
-        d.text((cx - text_w(d, cap, f_cap) / 2, 160), cap, font=f_cap, fill=GREY)
-
-
-def draw_regions(d):
-    f = load_font("DejaVuSans-Bold.ttf", 11)
-    x = MX
-    for label, count, cell_w in REGIONS:
-        text = "%s %d" % (label, count)
-        one_line(d, text, f, cell_w - 8, "region %s" % label)
-        d.rectangle([x, 178, x + cell_w, 200], fill=SOFT, outline=(180, 160, 120))
-        d.text((x + (cell_w - text_w(d, text, f)) / 2, 183), text, font=f, fill=INK)
-        x += cell_w
-
-
-def draw_hero_art(d, kind, x, y, wdt, hgt):
-    if kind == "blast":
-        d.rectangle([x, y, x + wdt, y + hgt], fill=SLATE)
-        d.rectangle([x + 20, y + hgt - 26, x + 90, y + hgt], fill=INK)
-        d.rectangle([x + 100, y + hgt - 38, x + 150, y + hgt], fill=INK)
-        d.rectangle([x + 160, y + hgt - 20, x + 230, y + hgt], fill=INK)
-        draw_icon(d, "blast", x + wdt - 70, y + 30, 52, GOLD)
-    elif kind == "ship":
-        d.rectangle([x, y, x + wdt, y + hgt], fill=NAVY)
-        for j in range(3):
-            yy = y + hgt - 10 - j * 6
-            d.line([(x + 10, yy), (x + wdt - 10, yy)], fill=(120, 150, 190), width=2)
-        draw_icon(d, "ship", x + wdt / 2, y + hgt / 2 - 4, 64, (200, 80, 60))
-    else:  # shield
-        d.rectangle([x, y, x + wdt, y + hgt], fill=(226, 232, 240))
-        draw_icon(d, "shield", x + wdt / 2, y + hgt / 2, 58, STEEL)
-
-
-def draw_heroes(d):
-    f_kick = load_font("DejaVuSans-Bold.ttf", 9)
-    f_head = load_font("DejaVuSerif-Bold.ttf", 19)
-    f_sub = load_font("DejaVuSerif.ttf", 11)
-    for i, (num, region, head, sub, kind) in enumerate(HEROES):
-        x = HERO_X[i]
-        draw_hero_art(d, kind, x, 212, HERO_W, 64)
-        one_line(d, region, f_kick, HERO_W, "hero %d kicker" % num)
-        d.text((x, 280), region, font=f_kick, fill=RED)
-        for j, line in enumerate(wrap_lines(d, head, f_head, HERO_W, 2, "hero %d head" % num)):
-            d.text((x, 294 + j * 22), line, font=f_head, fill=INK)
-        for j, line in enumerate(wrap_lines(d, sub, f_sub, HERO_W, 2, "hero %d sub" % num)):
-            d.text((x, 340 + j * 13), line, font=f_sub, fill=INK)
-
-
-def draw_smalls(d):
-    f_kick = load_font("DejaVuSans-Bold.ttf", 9)
-    f_head = load_font("DejaVuSerif-Bold.ttf", 15)
-    f_sub = load_font("DejaVuSerif.ttf", 9)
-    for i, (num, region, head, sub, kind) in enumerate(SMALLS):
-        row = 0 if i < 5 else 1
-        col = i % 5
-        x = SMALL_X[col]
-        art_y = 380 if row == 0 else 528
-        ky = 457 if row == 0 else 605
-        hy = 470 if row == 0 else 618
-        sy = 501 if row == 0 else 649
-        d.rectangle([x, art_y, x + SMALL_W, art_y + 70], fill=SOFT)
-        draw_icon(d, kind, x + SMALL_W / 2, art_y + 35, 44, (90, 90, 100))
-        one_line(d, region, f_kick, SMALL_W, "small %d kicker" % num)
-        d.text((x, ky), region, font=f_kick, fill=RED)
-        for j, line in enumerate(wrap_lines(d, head, f_head, SMALL_W, 2, "small %d head" % num)):
-            d.text((x, hy + j * 16), line, font=f_head, fill=INK)
-        for j, line in enumerate(wrap_lines(d, sub, f_sub, SMALL_W, 2, "small %d sub" % num)):
-            d.text((x, sy + j * 10), line, font=f_sub, fill=INK)
-
-
-def draw_map(d, img):
-    f_head = load_font("DejaVuSans-Bold.ttf", 13)
-    f_pin = load_font("DejaVuSans-Bold.ttf", 9)
-    one_line(d, "WHERE IT HAPPENED", f_head, MAP_X1 - MAP_X0, "map header")
-    d.text((MAP_X0, 674), "WHERE IT HAPPENED", font=f_head, fill=INK)
-    d.rectangle([MAP_X0, MAP_Y0, MAP_X1, MAP_Y1], fill=NAVY)
-    eq_y = int(project(0, 0)[1])
-    for xx in range(MAP_X0, MAP_X1, 12):
-        d.line([(xx, eq_y), (min(xx + 6, MAP_X1), eq_y)], fill=(120, 150, 190), width=1)
-    for poly in LAND:
-        pts = [project(lon, lat) for lon, lat in poly]
-        d.polygon(pts, fill=TAN, outline=LAND_EDGE)
-    for sea in (CASPIAN, BLACK_SEA):
-        pts = [project(lon, lat) for lon, lat in sea]
-        d.polygon(pts, fill=NAVY)
-    for num, lon, lat, dx, dy in PINS:
-        tx, ty = project(lon, lat)
-        dx2, dy2 = tx + dx, ty + dy
-        if dx or dy:
-            d.line([(tx, ty), (dx2, dy2)], fill=(220, 220, 220), width=1)
-            d.ellipse([tx - 2, ty - 2, tx + 2, ty + 2], fill=WHITE)
-        d.ellipse([dx2 - 7, dy2 - 7, dx2 + 7, dy2 + 7], fill=RED, outline=WHITE, width=1)
-        t = str(num)
-        d.text((dx2 - text_w(d, t, f_pin) / 2, dy2 - 6), t, font=f_pin, fill=WHITE)
-    cap = italic_layer(MAP_CAPTION, load_font("DejaVuSerif.ttf", 11), GREY)
-    if cap.width > MAP_X1 - MAP_X0:
-        raise AssertionError("OVERFLOW map caption")
-    img.paste(cap, (MX, 915), cap)
-
-
-def draw_also(d):
-    f_head = load_font("DejaVuSans-Bold.ttf", 13)
-    head = "ALSO ON TUESDAY 24 NOVEMBER \u2014 22 MORE STORIES"
-    one_line(d, head, f_head, RX - 420, "also header")
-    d.text((420, 674), head, font=f_head, fill=INK)
-    f_bold = load_font("DejaVuSans-Bold.ttf", 11)
-    f_reg = load_font("DejaVuSans.ttf", 11)
-    for i, (num, region, brief) in enumerate(ALSO):
-        col = 0 if i < 11 else 1
-        cx, cwid = ALSO_COLS[col]
-        y = 695 + (i % 11) * 20
-        n = str(num)
-        head_txt = region + ": "
-        total = (text_w(d, n, f_bold) + 4 + text_w(d, head_txt, f_bold)
-                 + text_w(d, brief, f_reg))
-        if total > cwid:
-            raise AssertionError(
-                "OVERFLOW also %d: %.1fpx, max %d" % (num, total, cwid)
-            )
-        d.text((cx, y), n, font=f_bold, fill=RED)
-        x = cx + text_w(d, n, f_bold) + 4
-        d.text((x, y), head_txt, font=f_bold, fill=INK)
-        x += text_w(d, head_txt, f_bold)
-        d.text((x, y), brief, font=f_reg, fill=INK)
-
-
-def draw_datecheck(d):
-    d.rectangle([MX, 930, RX, 975], outline=RED, width=2)
-    f_title = load_font("DejaVuSans-Bold.ttf", 10)
-    f_item = load_font("DejaVuSans.ttf", 9)
-    one_line(d, DATE_CHECK_TITLE, f_title, RX - MX - 16, "date check title")
-    d.text((MX + 8, 933), DATE_CHECK_TITLE, font=f_title, fill=RED)
-    for i, row in enumerate(DATE_CHECK_ROWS):
-        one_line(d, row, f_item, RX - MX - 16, "date check row %d" % (i + 1))
-        d.text((MX + 8, 947 + i * 12), row, font=f_item, fill=INK)
-
-
-def draw_sources(d):
-    f = load_font("DejaVuSans.ttf", 9)
-    one_line(d, SOURCES, f, RX - MX, "sources")
-    d.text((MX, 996), SOURCES, font=f, fill=GREY)
-
-
-# ---------------------------------------------------------------- build
-def build(out_path):
+def build():
     img = Image.new("RGB", (W, H), CREAM)
-    d = ImageDraw.Draw(img)
-    draw_topbar(d)
-    draw_masthead(d, img)
-    draw_stats(d)
-    draw_regions(d)
-    draw_heroes(d)
-    draw_smalls(d)
-    draw_map(d, img)
-    draw_also(d)
-    draw_datecheck(d)
-    draw_sources(d)
-    img.save(out_path, format="PNG")
-    print("wrote %s" % out_path)
+    draw = ImageDraw.Draw(img)
 
+    # Top bar.
+    draw.rectangle([12, 11, 1012, 14], fill=RED)
 
-def main():
-    here = Path(__file__).resolve().parent
-    build(str(here / "entry.png"))
-    return 0
+    # Masthead.
+    f_mast = font("DejaVuSerif-Bold.ttf", 56)
+    mw = text_w(draw, MASTHEAD, f_mast)
+    if mw > 1000:
+        raise AssertionError("OVERFLOW masthead: %d px > 1000" % mw)
+    draw.text(((W - mw) / 2, 14), MASTHEAD, font=f_mast, fill=INK)
+
+    # Red italic subline (sheared 0.22), centred, y=98.
+    f_sub = font("DejaVuSerif.ttf", 17)
+    sw = text_w(draw, SUBLINE, f_sub)
+    if sw > 1000:
+        raise AssertionError("OVERFLOW subline: %d px > 1000" % sw)
+    layer = Image.new("RGBA", (W, 34), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    ld.text(((W - sw) / 2, 2), SUBLINE, font=f_sub, fill=RED + (255,))
+    layer = layer.transform(layer.size, Image.AFFINE, (1, 0.22, 0, 0, 1, 0))
+    img.paste(layer, (0, 96), layer)
+
+    # Stat strip: six numbers with captions.
+    f_stat = font("DejaVuSerif-Bold.ttf", 20)
+    f_statcap = font("DejaVuSans.ttf", 8)
+    col_w = 1000 / 6
+    for i, (num, cap) in enumerate(STATS):
+        cx = 12 + col_w * i + col_w / 2
+        nw = text_w(draw, num, f_stat)
+        draw.text((cx - nw / 2, 126), num, font=f_stat, fill=INK)
+        cw = text_w(draw, cap, f_statcap)
+        if cw > col_w - 8:
+            raise AssertionError("OVERFLOW stat caption: %r" % cap)
+        draw.text((cx - cw / 2, 150), cap, font=f_statcap, fill=GREY)
+
+    # Region bar: segments sized by story count (min 70 px each).
+    total = sum(c for _, c in REGIONS)
+    base = 70
+    rest = 1000 - base * len(REGIONS)
+    widths = [base + round(rest * c / total) for _, c in REGIONS]
+    widths[-1] += 1000 - sum(widths)
+    f_reg = font("DejaVuSans-Bold.ttf", 9)
+    x = 12
+    for (name, count), seg_w in zip(REGIONS, widths):
+        draw.rectangle([x, 168, x + seg_w, 188], fill=DARK_BAR)
+        label = "%s %d" % (name, count)
+        lw = text_w(draw, label, f_reg)
+        if lw > seg_w - 6:
+            raise AssertionError("OVERFLOW region label: %r" % label)
+        draw.text((x + (seg_w - lw) / 2, 173), label, font=f_reg, fill=(255, 255, 255))
+        x += seg_w
+
+    # Heroes: three columns.
+    f_hkick = font("DejaVuSans-Bold.ttf", 9)
+    f_hhead = font("DejaVuSerif-Bold.ttf", 26)
+    f_hsub = font("DejaVuSerif.ttf", 11)
+    hero_xs = [12, 352, 692]
+    hero_w = 320
+    for (kicker, head, sub, kind, _t, _d), hx in zip(HEROES, hero_xs):
+        draw.line([(hx, 200), (hx + hero_w, 200)], fill=RED, width=2)
+        draw.text((hx, 208), kicker, font=f_hkick, fill=RED)
+        head_lines = wrap_lines(draw, head, f_hhead, hero_w, 3, "hero head")
+        draw_lines(draw, head_lines, hx, 226, f_hhead, INK, 30)
+        sub_y = 226 + len(head_lines) * 30 + 8
+        sub_lines = wrap_lines(draw, sub, f_hsub, hero_w, 2, "hero sub")
+        draw_lines(draw, sub_lines, hx, sub_y, f_hsub, INK, 14)
+        art_y = sub_y + len(sub_lines) * 14 + 12
+        art_h = 445 - art_y
+        if art_h < 40:
+            raise AssertionError("OVERFLOW hero art too short: %d px" % art_h)
+        hero_art(draw, hx, art_y, hero_w, art_h, kind)
+        draw.line([(hx, 448), (hx + hero_w, 448)], fill=GREY, width=1)
+
+    # Smalls: two rows x five columns.
+    f_skick = font("DejaVuSans-Bold.ttf", 8)
+    f_shead = font("DejaVuSerif-Bold.ttf", 15)
+    f_ssub = font("DejaVuSerif.ttf", 9)
+    col_xs = [12, 214, 416, 618, 820]
+    col_w = 192
+    row_ys = [(457, 470, 501), (605, 618, 649)]
+    for row_i, (ky, hy, sy) in enumerate(row_ys):
+        for col_i, cx in enumerate(col_xs):
+            idx = row_i * 5 + col_i
+            kicker, head, sub, _t, _d = SMALLS[idx]
+            draw.text((cx, ky), kicker, font=f_skick, fill=RED)
+            head_lines = wrap_lines(draw, head, f_shead, col_w, 2, "small head")
+            draw_lines(draw, head_lines, cx, hy, f_shead, INK, 16)
+            sub_lines = wrap_lines(draw, sub, f_ssub, col_w, 3, "small sub")
+            draw_lines(draw, sub_lines, cx, sy, f_ssub, INK, 10)
+
+    # Map (left) with the 13 pins: 3 heroes + 10 smalls.
+    pins = []
+    for i, (_k, _h, _s, _kind, t, d) in enumerate(HEROES, start=1):
+        pins.append((i, (t[0], t[1], d[0], d[1])))
+    for j, (_k, _h, _s, t, d) in enumerate(SMALLS, start=4):
+        pins.append((j, (t[0], t[1], d[0], d[1])))
+    draw_map(img, draw, pins)
+    f_cap = font("DejaVuSerif.ttf", 10)
+    # Italic caption via the same shear trick, small factor.
+    cap_w = text_w(draw, MAP_CAPTION, f_cap)
+    cap_layer = Image.new("RGBA", (MAP_X1 - MAP_X0 + 40, 22), (0, 0, 0, 0))
+    cd = ImageDraw.Draw(cap_layer)
+    cd.text(((cap_layer.width - cap_w) / 2, 1), MAP_CAPTION, font=f_cap, fill=INK + (255,))
+    cap_layer = cap_layer.transform(cap_layer.size, Image.AFFINE, (1, 0.15, 0, 0, 1, 0))
+    img.paste(cap_layer, (MAP_X0 - 20, 915), cap_layer)
+
+    # ALSO: 22 one-liners in two columns beside the map.
+    f_also_h = font("DejaVuSans-Bold.ttf", 10)
+    f_also_n = font("DejaVuSans-Bold.ttf", 10)
+    f_also = font("DejaVuSerif.ttf", 10)
+    draw.text((430, 695), "ALSO", font=f_also_h, fill=INK)
+    draw.line([(430, 712), (1012, 712)], fill=GREY, width=1)
+    also_cols = [(430, 285), (730, 282)]
+    for half in range(2):
+        cx, cw = also_cols[half]
+        for r in range(11):
+            idx = half * 11 + r
+            num = 14 + idx
+            item = ALSO[idx]
+            y = 720 + r * 18
+            nlabel = "%d." % num
+            nw = text_w(draw, nlabel, f_also_n)
+            draw.text((cx, y), nlabel, font=f_also_n, fill=RED)
+            lines = wrap_lines(draw, item, f_also, cw - nw - 6, 1, "also %d" % num)
+            draw.text((cx + nw + 4, y), lines[0], font=f_also, fill=INK)
+
+    # DATE CHECK box, y=930..975.
+    draw.rectangle([12, 930, 1012, 975], outline=RED, width=2)
+    f_dc_h = font("DejaVuSans-Bold.ttf", 10)
+    f_dc = font("DejaVuSerif.ttf", 9)
+    draw.text((22, 937), "DATE CHECK \u2014 NOT 24 NOVEMBER NEWS:", font=f_dc_h, fill=RED)
+    dc_line = " \u00b7 ".join(DATE_CHECK_ITEMS)
+    dc_lines = wrap_lines(draw, dc_line, f_dc, 980, 1, "date check")
+    draw.text((22, 954), dc_lines[0], font=f_dc, fill=INK)
+
+    # Sources line.
+    f_src = font("DejaVuSans.ttf", 8)
+    sw = text_w(draw, SOURCES, f_src)
+    if sw > 1000:
+        raise AssertionError("OVERFLOW sources: %d px > 1000" % sw)
+    draw.text(((W - sw) / 2, 996), SOURCES, font=f_src, fill=GREY)
+
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "entry.png")
+    img.save(out, "PNG")
+    return out
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    print(build())
